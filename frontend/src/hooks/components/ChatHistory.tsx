@@ -17,3 +17,5 @@ export default function ChatHistory({ items, onSelect }: ChatHistoryProps) {
         </aside>
     );
 }
+
+
