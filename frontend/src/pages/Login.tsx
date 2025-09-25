@@ -15,12 +15,36 @@ export default function Login() {
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
         setError(null);
+        
+        // Basic validation
+        if (!email || !password) {
+            setError("Please fill in all fields");
+            return;
+        }
+        
         try {
             const token = await apiLogin(email, password);
             login(token);
             navigate("/review");
         } catch (e: any) {
-            setError(e?.response?.data?.detail ?? "Login failed");
+            console.error("Login error:", e);
+            let errorMessage = "Login failed";
+            
+            if (e?.response?.data) {
+                if (typeof e.response.data === 'string') {
+                    errorMessage = e.response.data;
+                } else if (e.response.data.detail) {
+                    if (typeof e.response.data.detail === 'string') {
+                        errorMessage = e.response.data.detail;
+                    } else if (Array.isArray(e.response.data.detail)) {
+                        errorMessage = e.response.data.detail.map((err: any) => err.msg || err).join(', ');
+                    }
+                }
+            } else if (e?.message) {
+                errorMessage = e.message;
+            }
+            
+            setError(errorMessage);
         }
     }
 

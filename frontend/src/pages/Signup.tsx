@@ -15,12 +15,46 @@ export default function Signup() {
     async function handleSubmit(e: React.FormEvent) {
         e.preventDefault();
         setError(null);
+        
+        // Basic validation
+        if (!email || !password) {
+            setError("Please fill in all fields");
+            return;
+        }
+        
+        if (!email.includes("@")) {
+            setError("Please enter a valid email address");
+            return;
+        }
+        
+        if (password.length < 6) {
+            setError("Password must be at least 6 characters long");
+            return;
+        }
+        
         try {
             const token = await apiSignup(email, password);
             login(token);
             navigate("/review");
         } catch (e: any) {
-            setError(e?.response?.data?.detail ?? "Signup failed");
+            console.error("Signup error:", e);
+            let errorMessage = "Signup failed";
+            
+            if (e?.response?.data) {
+                if (typeof e.response.data === 'string') {
+                    errorMessage = e.response.data;
+                } else if (e.response.data.detail) {
+                    if (typeof e.response.data.detail === 'string') {
+                        errorMessage = e.response.data.detail;
+                    } else if (Array.isArray(e.response.data.detail)) {
+                        errorMessage = e.response.data.detail.map((err: any) => err.msg || err).join(', ');
+                    }
+                }
+            } else if (e?.message) {
+                errorMessage = e.message;
+            }
+            
+            setError(errorMessage);
         }
     }
 

@@ -39,4 +39,9 @@ export async function signup(email: string, password: string): Promise<string> {
     return data.access_token;
 }
 
+export async function getCurrentUser(): Promise<{ email: string; id: number }> {
+    const { data } = await api.get<{ email: string; id: number }>("/auth/me");
+    return data;
+}
+
 

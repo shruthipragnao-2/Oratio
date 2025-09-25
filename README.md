@@ -6,36 +6,21 @@ An AI-powered backend that analyzes text to detect biased sentences and suggests
 Tech stack
 ----------
 - FastAPI (Python)
-- spaCy
 - PyTorch
-- TensorFlow
+- Hugging Face Transformers
+- MySQL (for user management)
+- SQLAlchemy (ORM)
 
 Project layout
 --------------
 
 ```
 oratio_backend/
-  app/
-    __init__.py
-    main.py
-    api/
-      __init__.py
-      routes.py
-    core/
-      __init__.py
-      config.py
-    services/
-      __init__.py
-      bias_detector.py
-    models/
-      __init__.py
-      tf_model.py
-      torch_model.py
-  tests/
-    __init__.py
-    test_health.py
-requirements.txt
-uvicorn.ini
+  main.py              # Single file backend with all functionality
+  run.py               # Simple startup script
+  setup_database.py    # MySQL database setup script
+  config.py            # Configuration settings
+  requirements.txt     # Dependencies
 ```
 
 Quickstart
@@ -52,19 +37,38 @@ python -m venv .venv
 
 ```bash
 pip install -r requirements.txt
-python -m spacy download en_core_web_lg
 ```
 
-3) Run the server
+3) Setup MySQL database
+
+Make sure MySQL server is running, then:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --use-colors
+python setup_database.py
+```
+
+You can configure MySQL connection in `config.py` or set environment variables:
+- `MYSQL_HOST` (default: localhost)
+- `MYSQL_PORT` (default: 3306)
+- `MYSQL_USER` (default: root)
+- `MYSQL_PASSWORD` (default: empty)
+- `MYSQL_DATABASE` (default: oratio)
+
+4) Run the server
+
+```bash
+python run.py
+# OR
+python main.py
 ```
 
 API
 ---
 
 - GET /health: Liveness check
+- POST /auth/signup: User registration
+- POST /auth/login: User authentication  
+- GET /auth/me: Get current user info
 - POST /analyze: Analyze text and return biased spans and neutral rewrites
 
 Example request
@@ -100,5 +104,8 @@ Example response
 
 Notes
 -----
-- This project includes lightweight placeholder models using both PyTorch and TensorFlow to demonstrate integration. You can swap in trained models later.
-- spaCy is used for sentence splitting, tokenization, and simple lexical heuristics.
+- This project uses Hugging Face's pre-trained models for bias detection (unitary/toxic-bert)
+- Falls back to rule-based detection if the model fails to load
+- Uses MySQL with SQLAlchemy ORM for user management
+- All functionality is contained in a single main.py file for simplicity
+- Requires MySQL server to be running for database operations

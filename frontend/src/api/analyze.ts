@@ -18,6 +18,7 @@ export interface SentenceAnalysis {
 }
 
 export interface AnalyzeResponse {
+    original_text: string;
     summary: Record<string, unknown>;
     sentences: SentenceAnalysis[];
 }
