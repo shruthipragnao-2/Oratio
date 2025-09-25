@@ -6,8 +6,7 @@ An AI-powered backend that analyzes text to detect biased sentences and suggests
 Tech stack
 ----------
 - FastAPI (Python)
-- PyTorch
-- Hugging Face Transformers
+- Google Gemini API (for bias detection)
 - MySQL (for user management)
 - SQLAlchemy (ORM)
 
@@ -39,7 +38,15 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-3) Setup MySQL database
+3) Setup Gemini API
+
+Get your API key from [Google AI Studio](https://makersuite.google.com/app/apikey) and set it:
+
+```bash
+export GEMINI_API_KEY="your-gemini-api-key-here"
+```
+
+4) Setup MySQL database
 
 Make sure MySQL server is running, then:
 
@@ -54,7 +61,7 @@ You can configure MySQL connection in `config.py` or set environment variables:
 - `MYSQL_PASSWORD` (default: empty)
 - `MYSQL_DATABASE` (default: oratio)
 
-4) Run the server
+5) Run the server
 
 ```bash
 python run.py
@@ -104,8 +111,8 @@ Example response
 
 Notes
 -----
-- This project uses Hugging Face's pre-trained models for bias detection (unitary/toxic-bert)
-- Falls back to rule-based detection if the model fails to load
+- This project uses Google's Gemini API for comprehensive bias detection
+- Provides advanced AI-powered analysis of various bias types (gender, racial, ageist, ableist, etc.)
 - Uses MySQL with SQLAlchemy ORM for user management
 - All functionality is contained in a single main.py file for simplicity
-- Requires MySQL server to be running for database operations
+- Requires Gemini API key and MySQL server to be running

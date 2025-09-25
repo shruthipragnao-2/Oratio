@@ -1,21 +1,26 @@
 """
 Oratio Backend - AI Bias Detection API
-Minimal FastAPI backend with PyTorch and Hugging Face integration
+Using Google Gemini API for comprehensive bias detection
 """
 
 import os
 import re
+import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 
-import torch
-import numpy as np
+# Load environment variables first
+try:
+    import environment
+except ImportError:
+    print("⚠️ environment.py not found, using system environment variables")
+
+import google.generativeai as genai
 from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, EmailStr
-from transformers import pipeline, AutoTokenizer, AutoModelForSequenceClassification
 from sqlalchemy import create_engine, Column, Integer, String, DateTime, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
@@ -23,7 +28,7 @@ import secrets
 from passlib.context import CryptContext
 
 # Configuration
-from config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, ALLOWED_ORIGINS, HF_MODEL_NAME, DATABASE_URL, BIAS_MODELS
+from config import SECRET_KEY, ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES, ALLOWED_ORIGINS, DATABASE_URL, GEMINI_API_KEY, GEMINI_MODEL
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -34,9 +39,8 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Global model variables - Multiple models for comprehensive bias detection
-bias_models = {}
-model_load_status = {}
+# Global Gemini model
+gemini_model = None
 
 # Database Models
 class UserModel(Base):
@@ -144,61 +148,39 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize multiple bias detection models on startup"""
-    global bias_models, model_load_status
+    """Initialize Gemini API on startup"""
+    global gemini_model
     
-    print("Loading multiple bias detection models...")
+    print("Initializing Gemini API...")
     print("=" * 50)
     
-    # Load multiple specialized models
-    for model_type, model_name in BIAS_MODELS.items():
-        try:
-            print(f"Loading {model_type} model: {model_name}")
-            
-            if model_type == "gender_bias":
-                # Special handling for bias identification model
-                bias_models[model_type] = pipeline(
-                    "text-classification",
-                    model=model_name,
-                    tokenizer=model_name,
-                    device=0 if torch.cuda.is_available() else -1
-                )
-            else:
-                # Standard text classification models
-                bias_models[model_type] = pipeline(
-                    "text-classification",
-                    model=model_name,
-                    tokenizer=model_name,
-                    device=0 if torch.cuda.is_available() else -1
-                )
-            
-            model_load_status[model_type] = True
-            print(f"✅ {model_type} model loaded successfully")
-            
-        except Exception as e:
-            print(f"❌ Error loading {model_type} model: {e}")
-            model_load_status[model_type] = False
-            bias_models[model_type] = None
-    
-    # Fallback: Load single model if all others fail
-    if not any(model_load_status.values()):
-        print("\nFalling back to single model...")
-        try:
-            bias_models["fallback"] = pipeline(
-                "text-classification",
-                model=HF_MODEL_NAME,
-                tokenizer=HF_MODEL_NAME,
-                device=0 if torch.cuda.is_available() else -1
-            )
-            model_load_status["fallback"] = True
-            print(f"✅ Fallback model loaded: {HF_MODEL_NAME}")
-        except Exception as e:
-            print(f"❌ Fallback model failed: {e}")
-            bias_models["fallback"] = None
-            model_load_status["fallback"] = False
+    try:
+        if not GEMINI_API_KEY:
+            print("❌ GEMINI_API_KEY not found in environment variables")
+            print("Please set GEMINI_API_KEY environment variable")
+            raise ValueError("GEMINI_API_KEY is required")
+        
+        # Configure Gemini API
+        genai.configure(api_key=GEMINI_API_KEY)
+        
+        # Initialize the model
+        gemini_model = genai.GenerativeModel(GEMINI_MODEL)
+        
+        # Test the connection
+        test_response = gemini_model.generate_content("Hello, this is a test.")
+        print(f"✅ Gemini API initialized successfully")
+        print(f"Model: {GEMINI_MODEL}")
+        print(f"Test response: {test_response.text[:50]}...")
+        
+    except Exception as e:
+        print(f"❌ Error initializing Gemini API: {e}")
+        print("\nPlease make sure:")
+        print("1. GEMINI_API_KEY is set correctly")
+        print("2. You have access to Google AI Studio")
+        print("3. Your API key has the necessary permissions")
+        gemini_model = None
     
     print("=" * 50)
-    print("Model loading complete!")
     
     yield
     
@@ -207,8 +189,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Oratio Bias Detection API",
-    description="AI-powered text bias detection and neutral rewriting",
-    version="1.0.0",
+    description="AI-powered text bias detection using Google Gemini API",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -273,262 +255,94 @@ async def get_me(current_user: User = Depends(get_current_user)):
     """Get current user information"""
     return current_user
 
-def detect_bias_comprehensive(text: str) -> List[Dict[str, Any]]:
-    """Comprehensive bias detection using multiple models"""
-    all_bias_spans = []
+def analyze_text_with_gemini(text: str) -> Dict[str, Any]:
+    """Analyze text for bias using Gemini API"""
+    if not gemini_model:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Gemini API not available"
+        )
     
-    # Try each loaded model
-    for model_type, model in bias_models.items():
-        if model is None:
-            continue
-            
-        try:
-            result = model(text)
-            
-            # Process results based on model type
-            if model_type == "toxicity":
-                # Toxicity model results
-                if result[0]['label'] in ['toxic', 'severe_toxic', 'threat', 'insult', 'identity_hate'] and result[0]['score'] > 0.5:
-                    all_bias_spans.append({
-                        "text": text,
-                        "start": 0,
-                        "end": len(text),
-                        "type": f"toxic_{result[0]['label']}",
-                        "confidence": result[0]['score'],
-                        "model": model_type
-                    })
-                    
-            elif model_type == "hate_speech":
-                # Hate speech model results
-                if result[0]['label'] in ['LABEL_1', 'hate', 'offensive'] and result[0]['score'] > 0.5:
-                    all_bias_spans.append({
-                        "text": text,
-                        "start": 0,
-                        "end": len(text),
-                        "type": "hate_speech",
-                        "confidence": result[0]['score'],
-                        "model": model_type
-                    })
-                    
-            elif model_type == "gender_bias":
-                # Gender bias model results
-                if result[0]['score'] > 0.5:
-                    bias_type = result[0]['label'].lower()
-                    all_bias_spans.append({
-                        "text": text,
-                        "start": 0,
-                        "end": len(text),
-                        "type": f"gender_{bias_type}",
-                        "confidence": result[0]['score'],
-                        "model": model_type
-                    })
-                    
-            elif model_type == "sentiment":
-                # Sentiment model for detecting negative bias
-                if result[0]['label'] in ['NEGATIVE', 'LABEL_0'] and result[0]['score'] > 0.7:
-                    all_bias_spans.append({
-                        "text": text,
-                        "start": 0,
-                        "end": len(text),
-                        "type": "negative_sentiment",
-                        "confidence": result[0]['score'],
-                        "model": model_type
-                    })
-                    
-        except Exception as e:
-            print(f"Error with {model_type} model: {e}")
-            continue
-    
-    # If no models detected bias, try rule-based detection
-    if not all_bias_spans:
-        all_bias_spans = detect_bias_simple(text)
-    
-    return all_bias_spans
+    # Create a comprehensive prompt for bias detection
+    prompt = f"""
+    Analyze the following text for bias and provide a detailed analysis in JSON format.
 
-def detect_bias_simple(text: str) -> List[Dict[str, Any]]:
-    """Simple rule-based bias detection as fallback"""
-    biased_terms = {
-        # Gender bias - more comprehensive patterns
-        'women cant cook': 'gender_bias',
-        'women can\'t cook': 'gender_bias',
-        'women dont cook': 'gender_bias',
-        'women don\'t cook': 'gender_bias',
-        'dont think women can cook': 'gender_bias',
-        'don\'t think women can cook': 'gender_bias',
-        'men are better': 'gender_bias',
-        'girls are bad at': 'gender_bias',
-        'boys are better': 'gender_bias',
-        'women are bad at': 'gender_bias',
-        'men cant': 'gender_bias',
-        'men can\'t': 'gender_bias',
-        
-        # Ableist terms
-        'crazy': 'ableist',
-        'insane': 'ableist', 
-        'stupid': 'ableist',
-        'dumb': 'ableist',
-        'lame': 'ableist',
-        'retarded': 'ableist',
-        'idiot': 'ableist',
-        'moron': 'ableist',
-        
-        # Homophobic terms
-        'gay': 'homophobic',
-        'fag': 'homophobic',
-        
-        # Sexist terms
-        'bitch': 'sexist',
-        'whore': 'sexist',
-        'slut': 'sexist',
-        
-        # Racist terms
-        'nigger': 'racist',
-        'chink': 'racist',
-        'spic': 'racist',
-        'kike': 'racist',
-        
-        # Ageist terms
-        'old man': 'ageist',
-        'old woman': 'ageist',
-        'old people': 'ageist',
-        'young and dumb': 'ageist',
-        'boomer': 'ageist',
-        'old people can\'t': 'ageist',
-        'old people cant': 'ageist',
-        
-        # Negative/toxic patterns
-        'you\'re an': 'toxic',
-        'you are an': 'toxic',
-        'this is terrible': 'negative_sentiment',
-        'this is awful': 'negative_sentiment',
-        'this is horrible': 'negative_sentiment'
-    }
-    
-    spans = []
-    text_lower = text.lower()
-    
-    for term, bias_type in biased_terms.items():
-        if term in text_lower:
-            start = text_lower.find(term)
-            end = start + len(term)
-            spans.append({
-                "text": text[start:end],
-                "start": start,
-                "end": end,
-                "type": bias_type,
-                "confidence": 1.0,
-                "model": "rule_based"
-            })
-    
-    return spans
+    Text to analyze: "{text}"
 
-def generate_suggestion(sentence: str, biased_spans: List[Dict[str, Any]]) -> str:
-    """Generate neutral suggestion for biased text"""
-    if not biased_spans:
-        return sentence
+    Please provide your analysis in the following JSON format:
+    {{
+        "biased_count": <number of biased elements found>,
+        "score": <overall bias score from 0.0 to 1.0>,
+        "sentences": [
+            {{
+                "sentence": "<the sentence>",
+                "biased_spans": [
+                    {{
+                        "text": "<biased text>",
+                        "start": <start position>,
+                        "end": <end position>,
+                        "type": "<bias type: gender_bias, racial_bias, ageist, ableist, religious_bias, etc.>"
+                    }}
+                ],
+                "suggestion": "<neutral alternative>"
+            }}
+        ]
+    }}
+
+    Guidelines for bias detection:
+    1. Look for gender bias (stereotypes about men/women abilities)
+    2. Look for racial/ethnic bias
+    3. Look for ageist language (discrimination based on age)
+    4. Look for ableist language (discrimination against disabilities)
+    5. Look for religious bias
+    6. Look for socioeconomic bias
+    7. Look for toxic or offensive language
+    8. Look for stereotyping or generalizations
+
+    Provide neutral, inclusive alternatives for any biased language found.
+    If no bias is found, set biased_count to 0 and score to 0.0.
+    """
     
-    # More comprehensive replacement rules
-    replacements = {
-        # Gender bias
-        'women cant cook': 'people have different cooking abilities',
-        'women can\'t cook': 'people have different cooking abilities',
-        'women dont cook': 'people have different cooking preferences',
-        'women don\'t cook': 'people have different cooking preferences',
-        'dont think women can cook': 'people have different cooking abilities',
-        'don\'t think women can cook': 'people have different cooking abilities',
-        'men are better': 'people have different strengths',
-        'girls are bad at': 'people have different abilities in',
-        'boys are better': 'people have different strengths',
-        'women are bad at': 'people have different abilities in',
-        'men cant': 'people may have difficulty with',
-        'men can\'t': 'people may have difficulty with',
+    try:
+        response = gemini_model.generate_content(prompt)
         
-        # Ableist terms
-        'crazy': 'unusual',
-        'insane': 'remarkable', 
-        'stupid': 'unwise',
-        'dumb': 'unwise',
-        'lame': 'unfortunate',
-        'retarded': 'inappropriate',
-        'idiot': 'person',
-        'moron': 'person',
+        # Parse the JSON response
+        response_text = response.text.strip()
         
-        # Ageist terms
-        'old man': 'person',
-        'old woman': 'person',
-        'young and dumb': 'inexperienced',
-        'old people': 'people',
-        'boomer': 'person',
-        'old people can\'t': 'people may have difficulty with',
-        'old people cant': 'people may have difficulty with',
+        # Remove any markdown formatting if present
+        if response_text.startswith("```json"):
+            response_text = response_text[7:]
+        if response_text.endswith("```"):
+            response_text = response_text[:-3]
         
-        # Homophobic terms
-        'gay': 'person',
-        'fag': 'person',
+        # Parse JSON
+        analysis = json.loads(response_text)
         
-        # Sexist terms
-        'bitch': 'person',
-        'whore': 'person',
-        'slut': 'person',
+        return analysis
         
-        # Toxic patterns
-        'you\'re an': 'you are',
-        'you are an': 'you are',
-        'this is terrible': 'this is challenging',
-        'this is awful': 'this is challenging',
-        'this is horrible': 'this is challenging',
-        
-        # General bias patterns
-        'cant': 'may have difficulty with',
-        'can\'t': 'may have difficulty with'
-    }
-    
-    suggestion = sentence
-    for span in biased_spans:
-        original = span['text']
-        bias_type = span.get('type', 'toxic')
-        
-        # Try exact match first
-        if original.lower() in replacements:
-            replacement = replacements[original.lower()]
-        else:
-            # Try partial matches for common patterns
-            replacement = None
-            for pattern, replacement_text in replacements.items():
-                if pattern in original.lower():
-                    replacement = replacement_text
-                    break
-            
-            # Fallback based on bias type
-            if not replacement:
-                if 'gender' in bias_type:
-                    replacement = 'gender-neutral language'
-                elif bias_type == 'ageist':
-                    replacement = 'age-neutral language'
-                elif bias_type == 'ableist':
-                    replacement = 'ability-neutral language'
-                elif bias_type == 'racist':
-                    replacement = 'race-neutral language'
-                elif bias_type == 'homophobic':
-                    replacement = 'inclusive language'
-                elif bias_type == 'sexist':
-                    replacement = 'gender-neutral language'
-                elif 'toxic' in bias_type:
-                    replacement = 'more appropriate language'
-                elif bias_type == 'hate_speech':
-                    replacement = 'respectful language'
-                elif bias_type == 'negative_sentiment':
-                    replacement = 'more positive language'
-                else:
-                    replacement = 'more inclusive language'
-        
-        suggestion = suggestion.replace(original, replacement)
-    
-    return suggestion
+    except json.JSONDecodeError as e:
+        print(f"JSON parsing error: {e}")
+        print(f"Raw response: {response.text}")
+        # Fallback to simple analysis
+        return {
+            "biased_count": 0,
+            "score": 0.0,
+            "sentences": [{
+                "sentence": text,
+                "biased_spans": [],
+                "suggestion": text
+            }]
+        }
+    except Exception as e:
+        print(f"Gemini API error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error analyzing text: {str(e)}"
+        )
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_text(request: AnalyzeRequest, current_user: User = Depends(get_current_user)):
-    """Analyze text for bias and provide neutral alternatives"""
+    """Analyze text for bias using Gemini API"""
     text = request.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text cannot be empty")
@@ -546,25 +360,38 @@ async def analyze_text(request: AnalyzeRequest, current_user: User = Depends(get
     for sentence in sentences:
         if not sentence:
             continue
+        
+        try:
+            # Analyze each sentence with Gemini
+            analysis = analyze_text_with_gemini(sentence)
             
-        # Use comprehensive bias detection with multiple models
-        biased_spans = detect_bias_comprehensive(sentence)
-        
-        # Generate suggestion
-        suggestion = generate_suggestion(sentence, biased_spans)
-        
-        # Convert to BiasedSpan objects
-        biased_span_objects = [
-            BiasedSpan(**span) for span in biased_spans
-        ]
-        
-        sentence_analyses.append(SentenceAnalysis(
-            sentence=sentence,
-            biased_spans=biased_span_objects,
-            suggestion=suggestion
-        ))
-        
-        total_biased_count += len(biased_spans)
+            # Extract sentence analysis
+            sentence_data = analysis.get("sentences", [{}])[0] if analysis.get("sentences") else {}
+            
+            biased_spans = sentence_data.get("biased_spans", [])
+            suggestion = sentence_data.get("suggestion", sentence)
+            
+            # Convert to BiasedSpan objects
+            biased_span_objects = [
+                BiasedSpan(**span) for span in biased_spans
+            ]
+            
+            sentence_analyses.append(SentenceAnalysis(
+                sentence=sentence,
+                biased_spans=biased_span_objects,
+                suggestion=suggestion
+            ))
+            
+            total_biased_count += len(biased_spans)
+            
+        except Exception as e:
+            print(f"Error analyzing sentence '{sentence}': {e}")
+            # Fallback: no bias detected
+            sentence_analyses.append(SentenceAnalysis(
+                sentence=sentence,
+                biased_spans=[],
+                suggestion=sentence
+            ))
     
     # Calculate bias score
     bias_score = min(total_biased_count / len(sentences), 1.0) if sentences else 0.0

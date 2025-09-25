@@ -19,16 +19,9 @@ MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "oratio")
 # Construct MySQL URL
 DATABASE_URL = f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DATABASE}"
 
-# Model Configuration - Multiple models for comprehensive bias detection
-BIAS_MODELS = {
-    "toxicity": os.getenv("TOXICITY_MODEL", "unitary/toxic-bert"),
-    "hate_speech": os.getenv("HATE_SPEECH_MODEL", "cardiffnlp/twitter-roberta-base-sentiment-latest"),
-    "gender_bias": os.getenv("GENDER_BIAS_MODEL", "PriyaPatel/bias_identificaiton45"),
-    "sentiment": os.getenv("SENTIMENT_MODEL", "cardiffnlp/twitter-roberta-base-sentiment-latest")
-}
-
-# Fallback to single model if needed
-HF_MODEL_NAME = os.getenv("HF_MODEL_NAME", "unitary/toxic-bert")
+# Gemini API Configuration
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 # CORS
 ALLOWED_ORIGINS = [
