@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+import re
 import numpy as np
-import spacy
 from pydantic import BaseModel
 
-from ..core.config import settings
 from ..models.tf_model import TensorflowBiasScorer
 from ..models.torch_model import TorchBiasScorer
 
@@ -14,45 +13,43 @@ from ..models.torch_model import TorchBiasScorer
 class BiasDetectorService:
     def __init__(
         self,
-        nlp: spacy.language.Language,
         tf_model: TensorflowBiasScorer,
         torch_model: TorchBiasScorer,
     ) -> None:
-        self._nlp = nlp
         self._tf = tf_model
         self._torch = torch_model
 
     @classmethod
     def create_default(cls) -> "BiasDetectorService":
-        nlp = spacy.load(settings.spacy_model, disable=["ner", "lemmatizer"])  # speed
         tf_model = TensorflowBiasScorer()
-        torch_model = TorchBiasScorer(use_gpu=settings.use_gpu)
-        return cls(nlp=nlp, tf_model=tf_model, torch_model=torch_model)
+        torch_model = TorchBiasScorer(use_gpu=False)
+        return cls(tf_model=tf_model, torch_model=torch_model)
 
     def analyze_text(self, text: str) -> "AnalyzeResponse":
         if not text or not text.strip():
             raise ValueError("Text is empty")
 
-        doc = self._nlp(text)
+        # Very small sentence splitter to avoid heavyweight NLP deps
+        raw_sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
 
         sentences: List[SentenceAnalysis] = []
         biased_total = 0
         scores: List[float] = []
 
-        for sent in doc.sents:
-            spans = self._find_biased_spans(sent.text)
+        for sentence in raw_sentences:
+            spans = self._find_biased_spans(sentence)
             biased_total += len(spans)
 
             # Score with both models and average
-            tf_score = float(self._tf.score(sent.text))
-            torch_score = float(self._torch.score(sent.text))
+            tf_score = float(self._tf.score(sentence))
+            torch_score = float(self._torch.score(sentence))
             score = float((tf_score + torch_score) / 2.0)
             scores.append(score)
 
-            suggestion = self._suggest_rewrite(sent.text, spans)
+            suggestion = self._suggest_rewrite(sentence, spans)
             sentences.append(
                 SentenceAnalysis(
-                    sentence=sent.text,
+                    sentence=sentence,
                     biased_spans=[
                         BiasedSpan(text=s.text, start=s.start, end=s.end, type=s.type)
                         for s in spans

@@ -1,7 +1,14 @@
 from __future__ import annotations
 
-import torch
-from torch import nn
+# Make torch optional; fall back to deterministic scorer if unavailable
+try:  # pragma: no cover - optional
+    import torch
+    from torch import nn
+    _TORCH_AVAILABLE = True
+except Exception:  # pragma: no cover - optional
+    torch = None  # type: ignore
+    nn = None  # type: ignore
+    _TORCH_AVAILABLE = False
 
 
 class _TinyBiasNet(nn.Module):
@@ -20,17 +27,24 @@ class _TinyBiasNet(nn.Module):
 
 class TorchBiasScorer:
     def __init__(self, use_gpu: bool = False) -> None:
-        self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
-        self.model = _TinyBiasNet().to(self.device)
-        self.model.eval()
+        if _TORCH_AVAILABLE:
+            self.device = torch.device("cuda" if use_gpu and torch.cuda.is_available() else "cpu")
+            self.model = _TinyBiasNet().to(self.device)
+            self.model.eval()
+        else:
+            self.device = None  # type: ignore[assignment]
+            self.model = None  # type: ignore[assignment]
 
     def score(self, text: str) -> float:
-        # Hash text to deterministic pseudo-embedding for demo purposes
-        seed = abs(hash(text)) % (2**32)
-        generator = torch.Generator(device=self.device).manual_seed(seed)
-        x = torch.rand((1, 32), generator=generator, device=self.device)
-        with torch.no_grad():
-            y = self.model(x)
-        return float(y.item())
+        # Deterministic pseudo-score whether or not torch is installed
+        if _TORCH_AVAILABLE and self.model is not None:
+            seed = abs(hash(text)) % (2**32)
+            generator = torch.Generator(device=self.device).manual_seed(seed)
+            x = torch.rand((1, 32), generator=generator, device=self.device)
+            with torch.no_grad():
+                y = self.model(x)
+            return float(y.item())
+        else:
+            return float((abs(hash(text)) % 1000) / 1000.0)
 
 
